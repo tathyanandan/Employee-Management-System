@@ -1,0 +1,5 @@
+#Problem-Statement
+
+Organizations today manage employee records, task assignments, and payroll largely through spreadsheets or fragmented manual processes. This approach leads to several recurring issues: sensitive data such as salaries and personal identifiers are often exposed with no access control; there is no structured way to distinguish the responsibilities of different employee roles (e.g., regular staff vs. administrators) from one another; tracking task progress and accountability across a team is inconsistent and error-prone; and there is little to no systematic handling of invalid inputs or data errors, which can silently corrupt records.
+
+There is a need for a software system that centralizes employee information, enforces controlled access to sensitive data, models the natural hierarchy of organizational roles, tracks task completion in a structured and role-aware way, and gracefully handles erroneous operations instead of failing silently or crashing.
