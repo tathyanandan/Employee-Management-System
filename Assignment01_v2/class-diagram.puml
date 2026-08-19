@@ -1,0 +1,90 @@
+@startuml
+title Employee Management System - Domain Class Diagram
+skinparam classAttributeIconSize 0
+skinparam monochrome true
+
+class Employee {
+  - employeeId : String
+  - name : String
+  - password : String
+  - status : EmployeeStatus
+  - email : String
+  + login(password : String) : boolean
+  + updateTaskProgress(task : Task, progress : int) : void
+  + viewSalarySlip(slip : SalarySlip) : void
+}
+
+class Admin {
+  - adminId : String
+  - name : String
+  - password : String
+  - role : String
+  + login(password : String) : boolean
+  + assignTask(task : Task, employee : Employee) : void
+  + generatePayroll(employee : Employee) : Payroll
+}
+
+class Task {
+  - taskId : String
+  - title : String
+  - description : String
+  - dueDate : Date
+  - progress : int
+  + assignTo(employee : Employee) : void
+  + updateProgress(progress : int) : void
+  + isLate() : boolean
+  + calculateDelay() : int
+}
+
+class Penalty {
+  - penaltyId : String
+  - reason : String
+  - amount : double
+  - delayDays : int
+  + calculateAmount(delayDays : int) : double
+  + applyToPayroll(payroll : Payroll) : void
+}
+
+class Payroll {
+  - payrollId : String
+  - month : String
+  - basicSalary : double
+  - earnings : double
+  - deductions : double
+  - netSalary : double
+  + calculateEarnings() : double
+  + applyDeductions() : double
+  + applyPenalty(penalty : Penalty) : void
+  + calculateNetSalary() : double
+  + generateSalarySlip() : SalarySlip
+}
+
+class SalarySlip {
+  - slipId : String
+  - issueDate : Date
+  - grossSalary : double
+  - deductions : double
+  - penaltyAmount : double
+  - netSalary : double
+  + display() : void
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  DISABLED
+}
+
+Admin "1" -- "0..*" Task : assigns
+Employee "1" -- "0..*" Task : receives
+Employee "1" -- "0..*" Payroll : has
+Task "0..1" -- "0..1" Penalty : may incur
+Payroll "1" -- "0..*" Penalty : includes
+Payroll "1" -- "1" SalarySlip : generates
+Employee "1" -- "0..*" SalarySlip : views
+
+note right of Payroll
+Payroll processing may use
+the external Payroll System
+shown in the use-case diagram.
+end note
+@enduml
