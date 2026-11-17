@@ -1,0 +1,35 @@
+{
+  "currentDay": 1,
+  "nextTaskId": 2,
+  "nextSlipNumber": 2,
+  "employees": [
+    {
+      "id": "E001",
+      "name": "RAM",
+      "email": "RAM1@gmail.com",
+      "password": "108",
+      "status": "ACTIVE",
+      "tasks": [
+        {
+          "id": 1,
+          "title": "web deployement",
+          "description": "....",
+          "dueDay": 10,
+          "progress": 1
+        }
+      ],
+      "salarySlip": {
+        "slipId": "SLIP1",
+        "employeeId": "E001",
+        "employeeName": "RAM",
+        "basicSalary": 30000,
+        "earnings": 300000,
+        "deductions": 0,
+        "penalties": 0,
+        "netSalary": 330000,
+        "createdAt": "2026-11-17T16:42:52.140Z"
+      },
+      "pendingPenalty": 0
+    }
+  ]
+}
