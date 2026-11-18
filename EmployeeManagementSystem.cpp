@@ -5,6 +5,8 @@
 #include <thread>
 #include <mutex>
 #include <exception>
+#include <sstream>
+#include <cmath>
 
 using namespace std;
 
@@ -23,6 +25,47 @@ public:
         return message.c_str();
     }
 };
+
+// Simple input helpers
+class InputClosed {};
+
+bool isBlank(const string& value) {
+    return value.find_first_not_of(" \t\r\n") == string::npos;
+}
+
+bool validEmail(const string& value) {
+    size_t at = value.find('@');
+    if (at == string::npos || at == 0 || at > 64 || value.size() > 254 ||
+        value.find('@', at + 1) != string::npos) return false;
+
+    string local = value.substr(0, at);
+    string domain = value.substr(at + 1);
+    if (local.front() == '.' || local.back() == '.' ||
+        local.find("..") != string::npos) return false;
+
+    for (int i = 0; i < (int)local.size(); i++) {
+        char c = local[i];
+        bool letter = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+        bool digit = c >= '0' && c <= '9';
+        if (!letter && !digit && c != '.' && c != '_' && c != '+' && c != '-')
+            return false;
+    }
+
+    if (domain.empty() || domain.find('.') == string::npos) return false;
+    string label;
+    istringstream parts(domain);
+    while (getline(parts, label, '.')) {
+        if (label.empty() || label.size() > 63 ||
+            label.front() == '-' || label.back() == '-') return false;
+        for (int i = 0; i < (int)label.size(); i++) {
+            char c = label[i];
+            bool letter = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+            bool digit = c >= '0' && c <= '9';
+            if (!letter && !digit && c != '-') return false;
+        }
+    }
+    return domain.back() != '.';
+}
 
 // Basic Function Template
 
@@ -66,7 +109,7 @@ public:
     }
 
     void setName(string userName) {
-        if (userName.empty()) {
+        if (isBlank(userName)) {
             throw AppException("Name cannot be empty.");
         }
         name = userName;
@@ -109,6 +152,7 @@ private:
     string description;
     int dueDay;
     int progress;
+    int penaltyThroughDay = 0;
 
 public:
     Task() {
@@ -120,7 +164,7 @@ public:
     }
 
     Task(string taskTitle, string taskDescription, int dueDayNumber) {
-        if (taskTitle.empty()) {
+        if (isBlank(taskTitle)) {
             throw AppException("Task title cannot be empty.");
         }
 
@@ -156,11 +200,26 @@ public:
             throw AppException("Progress must be between 0 and 100.");
         }
 
+        if (progress == 100 && value != 100) {
+            throw AppException("A completed task cannot be reopened.");
+        }
         progress = value;
     }
 
     bool isLate(int currentDay) const {
         return currentDay > dueDay && progress < 100;
+    }
+
+    int unpaidDelay(int currentDay) const {
+        if (!isLate(currentDay)) return 0;
+        int start = dueDay;
+        if (penaltyThroughDay > start) start = penaltyThroughDay;
+        if (currentDay <= start) return 0;
+        return currentDay - start;
+    }
+
+    void markPenalty(int currentDay) {
+        if (isLate(currentDay)) penaltyThroughDay = currentDay;
     }
 
     void display() const {
@@ -191,7 +250,7 @@ public:
     }
 
     Penalty(string why, double rate, int days) {
-        if (rate < 0 || days < 0) {
+        if (!isfinite(rate) || rate < 0 || days < 0) {
             throw AppException("Penalty rate and delay days cannot be negative.");
         }
 
@@ -201,7 +260,11 @@ public:
     }
 
     double calculateAmount() const {
-        return amountPerDay * delayDays;
+        double amount = amountPerDay * delayDays;
+        if (!isfinite(amount)) {
+            throw AppException("Penalty amount is too large.");
+        }
+        return amount;
     }
 
     string getReason() const {
@@ -257,6 +320,9 @@ public:
         penalties = penaltyAmount;
 
         netSalary = basicSalary + earnings - deductions - penalties;
+        if (!isfinite(netSalary) || netSalary < 0) {
+            throw AppException("Net salary must be finite and cannot be negative.");
+        }
     }
 
     double getNetSalary() const {
@@ -383,6 +449,7 @@ private:
     bool hasSalarySlip;
 
     double pendingPenalty;
+    int penaltyThroughDay = 0;
 
 public:
     Employee() : User() {
@@ -404,6 +471,13 @@ public:
 
     string getEmail() const {
         return email;
+    }
+
+    void setEmail(string employeeEmail) {
+        if (!validEmail(employeeEmail)) {
+            throw AppException("Enter a valid email address.");
+        }
+        email = employeeEmail;
     }
 
     EmployeeStatus getStatus() const {
@@ -450,6 +524,24 @@ public:
         return false;
     }
 
+    int unpaidDelay(int day) const {
+        if (status != ACTIVE) return 0;
+        int days = 0;
+        for (int i = 0; i < (int)tasks.size(); i++) {
+            // One daily employee penalty, based on the longest unpaid delay.
+            if (tasks[i].unpaidDelay(day) > days) days = tasks[i].unpaidDelay(day);
+        }
+        int unchargedDays = day - penaltyThroughDay;
+        if (unchargedDays < 0) unchargedDays = 0;
+        if (days > unchargedDays) days = unchargedDays;
+        return days;
+    }
+
+    void markPenalty(int day) {
+        if (day > penaltyThroughDay) penaltyThroughDay = day;
+        for (int i = 0; i < (int)tasks.size(); i++) tasks[i].markPenalty(day);
+    }
+
     void setSalarySlip(const SalarySlip& slip) {
         latestSlip = slip;
         hasSalarySlip = true;
@@ -464,6 +556,9 @@ public:
     }
 
     void setPendingPenalty(double amount) {
+        if (!isfinite(amount) || amount < 0 || !isfinite(pendingPenalty + amount)) {
+            throw AppException("Invalid or excessive penalty amount.");
+        }
         pendingPenalty += amount;
     }
 
@@ -480,7 +575,7 @@ public:
     }
 
     void showRole() const override {
-        cout << name << " is an Employee.\n";
+        cout << name << " logged in successfully.\n";
     }
 
     // Friend function
@@ -519,7 +614,7 @@ public:
     }
 
     void showRole() const override {
-        cout << name << " is an Admin.\n";
+        cout << name << " logged in successfully.\n";
     }
 
     string getAdminRole() const {
@@ -552,7 +647,6 @@ public:
         cout << "\n--- Payroll Summary ---\n";
         cout << "Employees: " << employees.size() << "\n";
         cout << "Active employees: " << active << "\n";
-        cout << "Detailed salary amounts are available through each employee's salary slip.\n";
     }
 
     void generateDetailed(const vector<Employee>& employees) const override {
@@ -570,8 +664,7 @@ public:
     void generateSummary(const vector<Employee>& employees) const override {
         cout << "\n--- Tax Report Summary ---\n";
         cout << "Employees included: " << employees.size() << "\n";
-        cout << "Demo assumption: estimated tax is 10% of basic salary "
-             << "when a salary slip is generated.\n";
+        cout << "Tax calculation is not available.\n";
     }
 
     void generateDetailed(const vector<Employee>& employees) const override {
@@ -618,45 +711,39 @@ private:
         return NULL;
     }
 
+    string readLine(string prompt) {
+        string value;
+        cout << prompt;
+        if (!getline(cin, value)) {
+            throw InputClosed();
+        }
+        return value;
+    }
+
     int readInt(string prompt) {
-        int value;
-
         while (true) {
-            cout << prompt;
-
-            if (cin >> value) {
-                cin.ignore(10000, '\n');
+            string line = readLine(prompt);
+            istringstream input(line);
+            int value;
+            char extra;
+            if ((input >> value) && !(input >> extra)) {
                 return value;
             }
-
             cout << "Please enter a valid whole number.\n";
-            cin.clear();
-            cin.ignore(10000, '\n');
         }
     }
 
     double readDouble(string prompt) {
-        double value;
-
         while (true) {
-            cout << prompt;
-
-            if (cin >> value) {
-                cin.ignore(10000, '\n');
+            string line = readLine(prompt);
+            istringstream input(line);
+            double value;
+            char extra;
+            if ((input >> value) && !(input >> extra) && isfinite(value)) {
                 return value;
             }
-
             cout << "Please enter a valid number.\n";
-            cin.clear();
-            cin.ignore(10000, '\n');
         }
-    }
-
-    string readLine(string prompt) {
-        string value;
-        cout << prompt;
-        getline(cin, value);
-        return value;
     }
 
     void adminMenu();
@@ -664,6 +751,8 @@ private:
 
     void addEmployee();
     void removeEmployee();
+    void updateEmployee();
+    void changeEmployeeStatus();
     void assignTask();
     void generatePayroll();
     void showEmployees() const;
@@ -754,6 +843,8 @@ void EmployeeManagementSystem::adminMenu() {
         cout << "6. Apply late-task penalty\n";
         cout << "7. Reports\n";
         cout << "8. Set current day\n";
+        cout << "9. Update employee details\n";
+        cout << "10. Change employee status\n";
         cout << "0. Logout\n";
 
         try {
@@ -764,6 +855,14 @@ void EmployeeManagementSystem::adminMenu() {
             }
 
             switch (choice) {
+                case 9:
+                    updateEmployee();
+                    break;
+
+                case 10:
+                    changeEmployeeStatus();
+                    break;
+
                 case 1:
                     addEmployee();
                     break;
@@ -797,6 +896,10 @@ void EmployeeManagementSystem::adminMenu() {
                             throw AppException("Employee not found.");
                         }
 
+                        if (employee->getStatus() != ACTIVE) {
+                            throw AppException("New penalties require an ACTIVE employee.");
+                        }
+
                         if (!employee->hasLateTask(currentDay)) {
                             cout << "No late incomplete tasks found.\n";
                             break;
@@ -805,7 +908,11 @@ void EmployeeManagementSystem::adminMenu() {
                         employeeName = employee->getName();
                     }
 
-                    int days = readInt("Delay days: ");
+                    int days = findEmployee(id)->unpaidDelay(currentDay);
+                    if (days == 0) {
+                        cout << "No unpaid late days found.\n";
+                        break;
+                    }
                     double rate = readDouble("Penalty per day (Rs.): ");
 
                     // Basic threading: start a thread and wait for its completion.
@@ -816,7 +923,7 @@ void EmployeeManagementSystem::adminMenu() {
 
                     penaltyThread.join();
 
-                    cout << "Penalty application completed.\n";
+
                     break;
                 }
 
@@ -824,13 +931,18 @@ void EmployeeManagementSystem::adminMenu() {
                     reportMenu();
                     break;
 
-                case 8:
-                    currentDay = readInt("Current day number: ");
+                case 8: {
+                    int day = readInt("Current day number: ");
 
-                    if (currentDay < 1) {
+                    if (day < currentDay) {
+                        throw AppException("Current day cannot move backwards.");
+                    }
+                    if (day < 1) {
                         throw AppException("Day must be at least 1.");
                     }
+                    currentDay = day;
                     break;
+                }
 
                 default:
                     cout << "Choose a valid menu option.\n";
@@ -896,7 +1008,7 @@ void EmployeeManagementSystem::employeeMenu(Employee& employee) {
 void EmployeeManagementSystem::addEmployee() {
     string id = readLine("New employee ID: ");
 
-    if (id.empty() || findEmployee(id) != NULL) {
+    if (isBlank(id) || findEmployee(id) != NULL) {
         throw AppException("ID is empty or already exists.");
     }
 
@@ -904,14 +1016,82 @@ void EmployeeManagementSystem::addEmployee() {
     string password = readLine("Password: ");
     string email = readLine("Email: ");
 
-    if (name.empty() || password.empty() || email.empty()) {
-        throw AppException("Name, password and email cannot be empty.");
+    if (isBlank(name) || isBlank(password) || !validEmail(email)) {
+        throw AppException("Name/password cannot be blank and email must be valid.");
     }
 
     Employee newEmployee(id, name, password, email);
     employees.push_back(newEmployee);
 
     cout << "Employee added.\n";
+}
+
+// Update Employee Details
+
+void EmployeeManagementSystem::updateEmployee() {
+    string id = readLine("Employee ID to update: ");
+    Employee* employee = findEmployee(id);
+
+    if (employee == NULL) {
+        throw AppException("Employee not found.");
+    }
+
+    string name = readLine("New name: ");
+    string email = readLine("New email: ");
+
+    // Check both fields before changing the employee.
+    if (isBlank(name) || !validEmail(email)) {
+        throw AppException("Name cannot be blank and email must be valid.");
+    }
+
+    employee->setName(name);
+    employee->setEmail(email);
+
+    cout << "Employee details updated.\n";
+}
+
+// Change Employee Status
+
+void EmployeeManagementSystem::changeEmployeeStatus() {
+    string id = readLine("Employee ID: ");
+    Employee* employee = findEmployee(id);
+
+    if (employee == NULL) {
+        throw AppException("Employee not found.");
+    }
+
+    cout << "1. ACTIVE\n";
+    cout << "2. INACTIVE\n";
+    cout << "3. ON_LEAVE\n";
+    cout << "4. TERMINATED\n";
+
+    int choice = readInt("New status: ");
+    if (choice < 1 || choice > 4) {
+        throw AppException("Invalid employee status.");
+    }
+    if (employee->getStatus() != ACTIVE || choice != 1) {
+        employee->markPenalty(currentDay);
+    }
+
+    switch (choice) {
+        case 1:
+            employee->setStatus(ACTIVE);
+            break;
+        case 2:
+            employee->setStatus(INACTIVE);
+            break;
+        case 3:
+            employee->setStatus(ON_LEAVE);
+            break;
+        case 4:
+            employee->setStatus(TERMINATED);
+            break;
+        default:
+            throw AppException("Invalid employee status.");
+    }
+
+    cout << "Employee status updated to "
+         << statusToString(employee->getStatus()) << ".\n";
 }
 
 // Remove Employee
@@ -949,20 +1129,33 @@ void EmployeeManagementSystem::showEmployees() const {
 
 void EmployeeManagementSystem::assignTask() {
     string id = readLine("Employee ID: ");
-    string title = readLine("Task title: ");
-    string description = readLine("Task description: ");
-    int dueDay = readInt("Due day number (e.g. 10): ");
-
     Employee* employee = findEmployee(id);
 
     if (employee == NULL) {
         throw AppException("Employee not found.");
     }
 
+    if (employee->getStatus() != ACTIVE) {
+        throw AppException("Tasks can only be assigned to ACTIVE employees.");
+    }
+
+    string title = readLine("Task title: ");
+    string description = readLine("Task description: ");
+    int dueDay = readInt("Due day number (e.g. 10): ");
+
+    if (isBlank(title)) {
+        throw AppException("Task title cannot be empty.");
+    }
+    if (dueDay < 1) {
+        throw AppException("Due day must be at least 1.");
+    }
+    if (dueDay < currentDay) {
+        throw AppException("Due day cannot be before the current day.");
+    }
     Task newTask(title, description, dueDay);
     employee->addTask(newTask);
 
-    cout << "Task assigned. Tasks are kept in memory for this run.\n";
+    cout << "Task assigned successfully.\n";
 }
 
 // Penalty Thread Function
@@ -979,18 +1172,19 @@ void EmployeeManagementSystem::processPenalty(
         Employee* employee = findEmployee(id);
 
         if (employee == NULL) {
-            cout << "[Penalty Thread] Employee no longer exists.\n";
+            cout << "Penalty cancelled: employee not found.\n";
             return;
         }
 
         employee->setPendingPenalty(amount);
+        employee->markPenalty(currentDay);
 
-        cout << "[Penalty Thread] Penalty of Rs. "
+        cout << "Penalty of Rs. "
              << amount << " recorded for "
              << employeeName << ".\n";
     }
     catch (const AppException& error) {
-        cout << "[Penalty Thread] Error: " << error.what() << "\n";
+        cout << "Error: " << error.what() << "\n";
     }
 }
 
@@ -1006,21 +1200,32 @@ void EmployeeManagementSystem::generatePayroll() {
     }
 
     string employeeName = employee->getName();
-    bool lateTask = employee->hasLateTask(currentDay);
+    bool lateTask = employee->unpaidDelay(currentDay) > 0;
     double penaltyAmount = employee->getPendingPenalty();
 
     double basic = readDouble("Basic salary (Rs.): ");
     double bonus = readDouble("Bonus (Rs.): ");
     double deductions = readDouble("Deductions (Rs.): ");
 
-    if (lateTask && penaltyAmount == 0) {
+    if (basic < 0 || bonus < 0 || deductions < 0) {
+        throw AppException("Salary inputs cannot be negative.");
+    }
+    if (!isfinite(basic + bonus) || basic + bonus < deductions) {
+        throw AppException("Net salary must be finite and cannot be negative.");
+    }
+
+    if (lateTask) {
         cout << "Employee has a late incomplete task.\n";
 
         double rate = readDouble("Penalty per day (Rs.; enter 0 for none): ");
-        int days = readInt("Delay days: ");
+        int days = employee->unpaidDelay(currentDay);
 
         Penalty penalty("Late task", rate, days);
-        penaltyAmount = penalty.calculateAmount();
+        double newPenalty = penalty.calculateAmount();
+        employee->setPendingPenalty(newPenalty);
+        // Zero explicitly waives these days; they must not reappear later.
+        employee->markPenalty(currentDay);
+        penaltyAmount = employee->getPendingPenalty();
     }
 
     // Basic threading: payroll is processed by a separate thread.
@@ -1031,7 +1236,7 @@ void EmployeeManagementSystem::generatePayroll() {
 
     payrollThread.join();
 
-    cout << "Payroll generation completed.\n";
+
 }
 
 // Payroll Thread Function
@@ -1058,20 +1263,21 @@ void EmployeeManagementSystem::processPayroll(
             payroll.addPenalty(Penalty("Late task", penaltyAmount, 1));
         }
 
-        string slipId = "SLIP" + to_string(nextSlipNumber++);
+        string slipId = "SLIP" + to_string(nextSlipNumber);
 
         SalarySlip slip = payroll.generateSalarySlip(
             slipId, id, employeeName, bonus
         );
 
+        nextSlipNumber++;
         employee->setSalarySlip(slip);
         employee->clearPendingPenalty();
 
-        cout << "\n[Payroll Thread] Payroll generated successfully.\n";
+        cout << "\nPayroll generated successfully.\n";
         slip.display();
     }
     catch (const AppException& error) {
-        cout << "[Payroll Thread] Error: " << error.what() << "\n";
+        cout << "Error: " << error.what() << "\n";
     }
 }
 
@@ -1118,12 +1324,16 @@ int main() {
         EmployeeManagementSystem system;
         system.run();
     }
+    catch (const InputClosed&) {
+        cout << "\nGoodbye!\n";
+        return 0;
+    }
     catch (const AppException& error) {
-        cout << "Fatal error: " << error.what() << "\n";
+        cout << "Error: " << error.what() << "\n";
         return 1;
     }
     catch (const exception& error) {
-        cout << "Unexpected fatal error: " << error.what() << "\n";
+        cout << "Error: " << error.what() << "\n";
         return 1;
     }
 
